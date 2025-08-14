@@ -1,5 +1,5 @@
 services:
-  gemini-antiblock:
+  gemini-antiblock-go:
     image: ghcr.io/davidasx/gemini-antiblock-go:latest
     ports:
       - "8080:8080"
