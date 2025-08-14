@@ -13,5 +13,3 @@ services:
       - RETRY_DELAY_MS=750
       - SWALLOW_THOUGHTS_AFTER_RETRY=true
     restart: unless-stopped
-    profiles:
-      - prebuilt
