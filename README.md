@@ -14,11 +14,61 @@
 
 ## 安装和运行
 
-### 前置要求
+### 方法一：使用 Docker（推荐）
+
+#### 使用预构建的镜像
+
+```bash
+# 从 GitHub Container Registry 拉取镜像
+docker pull ghcr.io/davidasx/gemini-antiblock-go:latest
+
+# 运行容器
+docker run -d \
+  --name gemini-antiblock \
+  -p 8080:8080 \
+  -e UPSTREAM_URL_BASE=https://generativelanguage.googleapis.com \
+  -e MAX_CONSECUTIVE_RETRIES=100 \
+  -e DEBUG_MODE=true \
+  -e RETRY_DELAY_MS=750 \
+  -e SWALLOW_THOUGHTS_AFTER_RETRY=true \
+  ghcr.io/davidasx/gemini-antiblock-go:latest
+```
+
+#### 使用 Docker Compose
+
+```bash
+# 克隆仓库
+git clone https://github.com/Davidasx/gemini-antiblock-go.git
+cd gemini-antiblock-go
+
+# 使用本地构建
+docker-compose up -d
+
+# 或使用预构建镜像
+docker-compose --profile prebuilt up -d gemini-antiblock-prebuilt
+```
+
+#### 本地构建 Docker 镜像
+
+```bash
+# 构建镜像
+docker build -t gemini-antiblock-go .
+
+# 运行容器
+docker run -d \
+  --name gemini-antiblock \
+  -p 8080:8080 \
+  -e DEBUG_MODE=true \
+  gemini-antiblock-go
+```
+
+### 方法二：从源码运行
+
+#### 前置要求
 
 - Go 1.21 或更高版本
 
-### 安装依赖
+#### 安装依赖
 
 ```bash
 go mod download
@@ -93,7 +143,10 @@ go build -o gemini-antiblock
 ### 示例请求
 
 ```bash
-curl "http://127.0.0.1:8080/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse"   -H "x-goog-api-key: $GEMINI_API_KEY"   -H 'Content-Type: application/json'   -X POST --no-buffer  -d '{ 
+curl "http://127.0.0.1:8080/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse" \
+   -H "x-goog-api-key: $GEMINI_API_KEY" \
+   -H 'Content-Type: application/json' \
+   -X POST --no-buffer  -d '{
     "contents": [
       {
         "role": "user",
@@ -156,6 +209,77 @@ gemini-antiblock-go/
 - **DEBUG**: 详细的调试信息（仅在调试模式下显示）
 - **INFO**: 一般信息和操作状态
 - **ERROR**: 错误信息和异常
+
+## Docker 部署
+
+### 环境变量
+
+在 Docker 容器中可以通过环境变量配置应用：
+
+```bash
+docker run -d \
+  --name gemini-antiblock \
+  -p 8080:8080 \
+  -e UPSTREAM_URL_BASE=https://generativelanguage.googleapis.com \
+  -e MAX_CONSECUTIVE_RETRIES=100 \
+  -e DEBUG_MODE=true \
+  -e RETRY_DELAY_MS=750 \
+  -e SWALLOW_THOUGHTS_AFTER_RETRY=true \
+  -e PORT=8080 \
+  ghcr.io/davidasx/gemini-antiblock-go:latest
+```
+
+### 健康检查
+
+容器包含内置的健康检查功能，会定期检查服务状态：
+
+```bash
+# 查看容器健康状态
+docker ps
+
+# 查看健康检查日志
+docker inspect --format='{{json .State.Health}}' gemini-antiblock
+
+# 手动执行健康检查
+docker exec gemini-antiblock curl -f http://localhost:8080/
+```
+
+### 多架构支持
+
+Docker 镜像支持多种架构：
+
+- `linux/amd64` (x86_64)
+- `linux/arm64` (ARM64)
+
+Docker 会自动选择适合您系统架构的镜像。
+
+### 生产部署建议
+
+1. **使用特定版本标签**：避免使用 `latest` 标签，使用特定版本如 `v1.0.0`
+2. **设置资源限制**：
+   ```bash
+   docker run -d \
+     --name gemini-antiblock \
+     --memory=256m \
+     --cpus=0.5 \
+     -p 8080:8080 \
+     ghcr.io/davidasx/gemini-antiblock-go:v1.0.0
+   ```
+3. **使用 Docker Compose**：便于管理和扩展
+4. **配置日志轮转**：避免日志文件过大
+5. **设置重启策略**：确保服务高可用
+
+## CI/CD
+
+项目使用 GitHub Actions 自动构建和发布 Docker 镜像：
+
+- **触发条件**：推送到 `main`/`master` 分支或创建标签
+- **构建平台**：支持 `linux/amd64` 和 `linux/arm64`
+- **发布位置**：`ghcr.io/davidasx/gemini-antiblock-go`
+- **标签策略**：
+  - `latest`：最新的 main 分支构建
+  - `v1.0.0`：版本标签
+  - `main`：main 分支构建
 
 ## 许可证
 

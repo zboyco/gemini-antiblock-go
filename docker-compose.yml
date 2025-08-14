@@ -1,0 +1,17 @@
+version: "3.8"
+
+services:
+  gemini-antiblock:
+    image: ghcr.io/davidasx/gemini-antiblock-go:latest
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - UPSTREAM_URL_BASE=https://generativelanguage.googleapis.com
+      - MAX_CONSECUTIVE_RETRIES=100
+      - DEBUG_MODE=true
+      - RETRY_DELAY_MS=750
+      - SWALLOW_THOUGHTS_AFTER_RETRY=true
+    restart: unless-stopped
+    profiles:
+      - prebuilt
