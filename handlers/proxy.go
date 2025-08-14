@@ -27,7 +27,7 @@ func NewProxyHandler(cfg *config.Config) *ProxyHandler {
 // BuildUpstreamHeaders builds headers for upstream requests
 func (h *ProxyHandler) BuildUpstreamHeaders(reqHeaders http.Header) http.Header {
 	headers := make(http.Header)
-	
+
 	// Copy specific headers
 	if auth := reqHeaders.Get("Authorization"); auth != "" {
 		headers.Set("Authorization", auth)
@@ -41,7 +41,7 @@ func (h *ProxyHandler) BuildUpstreamHeaders(reqHeaders http.Header) http.Header 
 	if accept := reqHeaders.Get("Accept"); accept != "" {
 		headers.Set("Accept", accept)
 	}
-	
+
 	return headers
 }
 
@@ -50,7 +50,7 @@ func (h *ProxyHandler) InjectSystemPrompt(body map[string]interface{}) {
 	newSystemPromptPart := map[string]interface{}{
 		"text": "Your message must end with [done] to signify the end of your output.",
 	}
-	
+
 	// Case 1: systemInstruction field is missing or null
 	if _, exists := body["systemInstruction"]; !exists {
 		body["systemInstruction"] = map[string]interface{}{
@@ -58,7 +58,7 @@ func (h *ProxyHandler) InjectSystemPrompt(body map[string]interface{}) {
 		}
 		return
 	}
-	
+
 	systemInstruction, ok := body["systemInstruction"].(map[string]interface{})
 	if !ok {
 		body["systemInstruction"] = map[string]interface{}{
@@ -66,14 +66,14 @@ func (h *ProxyHandler) InjectSystemPrompt(body map[string]interface{}) {
 		}
 		return
 	}
-	
+
 	// Case 2: systemInstruction exists, but parts array is missing, null, or not an array
 	parts, ok := systemInstruction["parts"].([]interface{})
 	if !ok {
 		systemInstruction["parts"] = []interface{}{newSystemPromptPart}
 		return
 	}
-	
+
 	// Case 3: systemInstruction and parts array both exist - append to existing array
 	systemInstruction["parts"] = append(parts, newSystemPromptPart)
 }
@@ -85,12 +85,12 @@ func (h *ProxyHandler) HandleStreamingPost(w http.ResponseWriter, r *http.Reques
 	if urlObj.RawQuery != "" {
 		upstreamURL += "?" + urlObj.RawQuery
 	}
-	
+
 	logger.LogInfo("=== NEW STREAMING REQUEST ===")
 	logger.LogInfo("Upstream URL:", upstreamURL)
 	logger.LogInfo("Request method:", r.Method)
 	logger.LogInfo("Content-Type:", r.Header.Get("Content-Type"))
-	
+
 	// Read and parse request body
 	bodyBytes, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -98,23 +98,23 @@ func (h *ProxyHandler) HandleStreamingPost(w http.ResponseWriter, r *http.Reques
 		JSONError(w, 400, "Failed to read request body", err.Error())
 		return
 	}
-	
+
 	var requestBody map[string]interface{}
 	if err := json.Unmarshal(bodyBytes, &requestBody); err != nil {
 		logger.LogError("Failed to parse request body:", err)
 		JSONError(w, 400, "Invalid JSON in request body", err.Error())
 		return
 	}
-	
+
 	logger.LogDebug(fmt.Sprintf("Request body size: %d bytes", len(bodyBytes)))
-	
+
 	if contents, ok := requestBody["contents"].([]interface{}); ok {
 		logger.LogDebug(fmt.Sprintf("Parsed request body with %d messages", len(contents)))
 	}
-	
+
 	// Inject system prompt
 	h.InjectSystemPrompt(requestBody)
-	
+
 	// Create upstream request
 	modifiedBodyBytes, err := json.Marshal(requestBody)
 	if err != nil {
@@ -122,19 +122,19 @@ func (h *ProxyHandler) HandleStreamingPost(w http.ResponseWriter, r *http.Reques
 		JSONError(w, 500, "Internal server error", "Failed to process request body")
 		return
 	}
-	
+
 	logger.LogInfo("=== MAKING INITIAL REQUEST ===")
 	upstreamHeaders := h.BuildUpstreamHeaders(r.Header)
-	
+
 	upstreamReq, err := http.NewRequest("POST", upstreamURL, bytes.NewReader(modifiedBodyBytes))
 	if err != nil {
 		logger.LogError("Failed to create upstream request:", err)
 		JSONError(w, 500, "Internal server error", "Failed to create upstream request")
 		return
 	}
-	
+
 	upstreamReq.Header = upstreamHeaders
-	
+
 	client := &http.Client{}
 	initialResponse, err := client.Do(upstreamReq)
 	if err != nil {
@@ -142,19 +142,19 @@ func (h *ProxyHandler) HandleStreamingPost(w http.ResponseWriter, r *http.Reques
 		JSONError(w, 502, "Bad Gateway", "Failed to connect to upstream server")
 		return
 	}
-	
+
 	logger.LogInfo(fmt.Sprintf("Initial response status: %d %s", initialResponse.StatusCode, initialResponse.Status))
-	
+
 	// Initial failure: return standardized error
 	if initialResponse.StatusCode != http.StatusOK {
 		logger.LogError("=== INITIAL REQUEST FAILED ===")
 		logger.LogError("Status:", initialResponse.StatusCode)
 		logger.LogError("Status Text:", initialResponse.Status)
-		
+
 		// Read error response
 		errorBody, _ := io.ReadAll(initialResponse.Body)
 		initialResponse.Body.Close()
-		
+
 		// Try to parse as JSON error
 		var errorResp map[string]interface{}
 		if json.Unmarshal(errorBody, &errorResp) == nil {
@@ -171,7 +171,7 @@ func (h *ProxyHandler) HandleStreamingPost(w http.ResponseWriter, r *http.Reques
 			json.NewEncoder(w).Encode(errorResp)
 			return
 		}
-		
+
 		// Fallback to standard error
 		message := "Request failed"
 		if initialResponse.StatusCode == 429 {
@@ -180,16 +180,22 @@ func (h *ProxyHandler) HandleStreamingPost(w http.ResponseWriter, r *http.Reques
 		JSONError(w, initialResponse.StatusCode, message, string(errorBody))
 		return
 	}
-	
+
 	logger.LogInfo("=== INITIAL REQUEST SUCCESSFUL - STARTING STREAM PROCESSING ===")
-	
+
 	// Set up streaming response
 	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	// Additional headers to prevent buffering by proxies
+	w.Header().Set("X-Accel-Buffering", "no") // Nginx
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Expires", "0")
+
 	w.WriteHeader(http.StatusOK)
-	
+
 	// Process stream with retry logic
 	err = streaming.ProcessStreamAndRetryInternally(
 		h.Config,
@@ -199,12 +205,12 @@ func (h *ProxyHandler) HandleStreamingPost(w http.ResponseWriter, r *http.Reques
 		upstreamURL,
 		r.Header,
 	)
-	
+
 	if err != nil {
 		logger.LogError("=== UNHANDLED EXCEPTION IN STREAM PROCESSOR ===")
 		logger.LogError("Exception:", err)
 	}
-	
+
 	initialResponse.Body.Close()
 	logger.LogInfo("Streaming response completed")
 }
@@ -216,22 +222,22 @@ func (h *ProxyHandler) HandleNonStreaming(w http.ResponseWriter, r *http.Request
 	if urlObj.RawQuery != "" {
 		upstreamURL += "?" + urlObj.RawQuery
 	}
-	
+
 	upstreamHeaders := h.BuildUpstreamHeaders(r.Header)
-	
+
 	var body io.Reader
 	if r.Method != "GET" && r.Method != "HEAD" {
 		body = r.Body
 	}
-	
+
 	upstreamReq, err := http.NewRequest(r.Method, upstreamURL, body)
 	if err != nil {
 		JSONError(w, 500, "Internal server error", "Failed to create upstream request")
 		return
 	}
-	
+
 	upstreamReq.Header = upstreamHeaders
-	
+
 	client := &http.Client{}
 	resp, err := client.Do(upstreamReq)
 	if err != nil {
@@ -239,11 +245,11 @@ func (h *ProxyHandler) HandleNonStreaming(w http.ResponseWriter, r *http.Request
 		return
 	}
 	defer resp.Body.Close()
-	
+
 	if resp.StatusCode != http.StatusOK {
 		// Handle error response
 		errorBody, _ := io.ReadAll(resp.Body)
-		
+
 		var errorResp map[string]interface{}
 		if json.Unmarshal(errorBody, &errorResp) == nil {
 			if errorObj, ok := errorResp["error"].(map[string]interface{}); ok {
@@ -259,11 +265,11 @@ func (h *ProxyHandler) HandleNonStreaming(w http.ResponseWriter, r *http.Request
 			json.NewEncoder(w).Encode(errorResp)
 			return
 		}
-		
+
 		JSONError(w, resp.StatusCode, resp.Status, string(errorBody))
 		return
 	}
-	
+
 	// Copy response headers
 	for name, values := range resp.Header {
 		for _, value := range values {
@@ -271,7 +277,7 @@ func (h *ProxyHandler) HandleNonStreaming(w http.ResponseWriter, r *http.Request
 		}
 	}
 	w.Header().Set("Access-Control-Allow-Origin", "*")
-	
+
 	w.WriteHeader(resp.StatusCode)
 	io.Copy(w, resp.Body)
 }
@@ -283,24 +289,24 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	logger.LogInfo("URL:", r.URL.String())
 	logger.LogInfo("User-Agent:", r.Header.Get("User-Agent"))
 	logger.LogInfo("X-Forwarded-For:", r.Header.Get("X-Forwarded-For"))
-	
+
 	if r.Method == "OPTIONS" {
 		logger.LogDebug("Handling CORS preflight request")
 		HandleCORS(w, r)
 		return
 	}
-	
+
 	// Determine if this is a streaming request
 	isStream := strings.Contains(strings.ToLower(r.URL.Path), "stream") ||
 		strings.Contains(strings.ToLower(r.URL.Path), "sse") ||
 		r.URL.Query().Get("alt") == "sse"
-	
+
 	logger.LogInfo("Detected streaming request:", isStream)
-	
+
 	if r.Method == "POST" && isStream {
 		h.HandleStreamingPost(w, r)
 		return
 	}
-	
+
 	h.HandleNonStreaming(w, r)
 }
