@@ -93,15 +93,22 @@ go build -o gemini-antiblock
 ### 示例请求
 
 ```bash
-curl -X POST http://localhost:8080/v1beta/models/gemini-pro:streamGenerateContent \
-  -H "Authorization: Bearer YOUR_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "contents": [{
-      "parts": [{
-        "text": "Hello, how are you?"
-      }]
-    }]
+curl "http://127.0.0.1:8080/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse"   -H "x-goog-api-key: $GEMINI_API_KEY"   -H 'Content-Type: application/json'   -X POST --no-buffer  -d '{ 
+    "contents": [
+      {
+        "role": "user",
+        "parts": [
+          {
+            "text": "Hello"
+          }
+        ]
+      }
+    ],
+    "generationConfig": {
+      "thinkingConfig": {
+        "includeThoughts": true
+      }
+    }
   }'
 ```
 
