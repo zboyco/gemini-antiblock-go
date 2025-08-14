@@ -154,7 +154,13 @@ func ProcessStreamAndRetryInternally(cfg *config.Config, initialReader io.Reader
 			} else if finishReason == "STOP" {
 				tempAccumulatedText := accumulatedText + textChunk
 				trimmedText := strings.TrimSpace(tempAccumulatedText)
-				if len(trimmedText) > 0 && !strings.HasSuffix(trimmedText, "[done]") {
+
+				// Check for empty response - if we have STOP but no accumulated text at all, it's incomplete
+				if len(trimmedText) == 0 {
+					logger.LogError("Finish reason 'STOP' with no text content detected. This indicates an empty response. Triggering retry.")
+					interruptionReason = "FINISH_EMPTY_RESPONSE"
+					needsRetry = true
+				} else if !strings.HasSuffix(trimmedText, "[done]") {
 					lastChar := trimmedText[len(trimmedText)-1:]
 					logger.LogError(fmt.Sprintf("Finish reason 'STOP' treated as incomplete because text ends with '%s'. Triggering retry.", lastChar))
 					interruptionReason = "FINISH_INCOMPLETE"
@@ -177,7 +183,7 @@ func ProcessStreamAndRetryInternally(cfg *config.Config, initialReader io.Reader
 			if _, err := writer.Write([]byte(processedLine + "\n\n")); err != nil {
 				return fmt.Errorf("failed to write to output stream: %w", err)
 			}
-			
+
 			// Flush the response to ensure data is sent immediately to the client
 			if flusher, ok := writer.(http.Flusher); ok {
 				flusher.Flush()
@@ -248,12 +254,12 @@ func ProcessStreamAndRetryInternally(cfg *config.Config, initialReader io.Reader
 
 			errorBytes, _ := json.Marshal(errorPayload)
 			writer.Write([]byte(fmt.Sprintf("event: error\ndata: %s\n\n", string(errorBytes))))
-			
+
 			// Flush the error response to ensure it's sent immediately
 			if flusher, ok := writer.(http.Flusher); ok {
 				flusher.Flush()
 			}
-			
+
 			return fmt.Errorf("retry limit exceeded")
 		}
 
@@ -311,12 +317,12 @@ func ProcessStreamAndRetryInternally(cfg *config.Config, initialReader io.Reader
 			retryResponse.Body.Close()
 
 			writer.Write([]byte(fmt.Sprintf("event: error\ndata: %s\n\n", string(errorBytes))))
-			
+
 			// Flush the error response to ensure it's sent immediately
 			if flusher, ok := writer.(http.Flusher); ok {
 				flusher.Flush()
 			}
-			
+
 			return fmt.Errorf("non-retryable error: %d", retryResponse.StatusCode)
 		}
 
