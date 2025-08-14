@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   gemini-antiblock:
     image: ghcr.io/davidasx/gemini-antiblock-go:latest
