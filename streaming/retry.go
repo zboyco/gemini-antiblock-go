@@ -177,6 +177,11 @@ func ProcessStreamAndRetryInternally(cfg *config.Config, initialReader io.Reader
 			if _, err := writer.Write([]byte(processedLine + "\n\n")); err != nil {
 				return fmt.Errorf("failed to write to output stream: %w", err)
 			}
+			
+			// Flush the response to ensure data is sent immediately to the client
+			if flusher, ok := writer.(http.Flusher); ok {
+				flusher.Flush()
+			}
 
 			if textChunk != "" && !isThought {
 				isOutputtingFormalText = true
@@ -243,6 +248,12 @@ func ProcessStreamAndRetryInternally(cfg *config.Config, initialReader io.Reader
 
 			errorBytes, _ := json.Marshal(errorPayload)
 			writer.Write([]byte(fmt.Sprintf("event: error\ndata: %s\n\n", string(errorBytes))))
+			
+			// Flush the error response to ensure it's sent immediately
+			if flusher, ok := writer.(http.Flusher); ok {
+				flusher.Flush()
+			}
+			
 			return fmt.Errorf("retry limit exceeded")
 		}
 
@@ -300,6 +311,12 @@ func ProcessStreamAndRetryInternally(cfg *config.Config, initialReader io.Reader
 			retryResponse.Body.Close()
 
 			writer.Write([]byte(fmt.Sprintf("event: error\ndata: %s\n\n", string(errorBytes))))
+			
+			// Flush the error response to ensure it's sent immediately
+			if flusher, ok := writer.(http.Flusher); ok {
+				flusher.Flush()
+			}
+			
 			return fmt.Errorf("non-retryable error: %d", retryResponse.StatusCode)
 		}
 
