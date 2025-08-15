@@ -8,20 +8,32 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"gemini-antiblock/config"
+	httpClient "gemini-antiblock/http"
 	"gemini-antiblock/logger"
+	"gemini-antiblock/metrics"
 	"gemini-antiblock/streaming"
+	"gemini-antiblock/utils"
 )
 
 // ProxyHandler handles proxy requests to Gemini API
 type ProxyHandler struct {
-	Config *config.Config
+	Config        *config.Config
+	HTTPClient    *httpClient.ClientManager
+	JSONProcessor *utils.JSONProcessor
 }
 
 // NewProxyHandler creates a new proxy handler
 func NewProxyHandler(cfg *config.Config) *ProxyHandler {
-	return &ProxyHandler{Config: cfg}
+	logger.LogInfo("Initializing proxy handler with optimized components")
+
+	return &ProxyHandler{
+		Config:        cfg,
+		HTTPClient:    httpClient.NewClientManager(cfg),
+		JSONProcessor: utils.NewJSONProcessor(cfg.JSONBufferSize),
+	}
 }
 
 // BuildUpstreamHeaders builds headers for upstream requests
@@ -80,6 +92,13 @@ func (h *ProxyHandler) InjectSystemPrompt(body map[string]interface{}) {
 
 // HandleStreamingPost handles streaming POST requests
 func (h *ProxyHandler) HandleStreamingPost(w http.ResponseWriter, r *http.Request) {
+	startTime := time.Now()
+	m := metrics.GetGlobalMetrics()
+
+	// Record metrics
+	m.IncrementTotalRequests()
+	m.IncrementStreamingRequests()
+
 	urlObj, _ := url.Parse(r.URL.String())
 	upstreamURL := h.Config.UpstreamURLBase + urlObj.Path
 	if urlObj.RawQuery != "" {
@@ -116,7 +135,7 @@ func (h *ProxyHandler) HandleStreamingPost(w http.ResponseWriter, r *http.Reques
 	h.InjectSystemPrompt(requestBody)
 
 	// Create upstream request
-	modifiedBodyBytes, err := json.Marshal(requestBody)
+	modifiedBodyBytes, err := h.JSONProcessor.Marshal(requestBody)
 	if err != nil {
 		logger.LogError("Failed to marshal modified request body:", err)
 		JSONError(w, 500, "Internal server error", "Failed to process request body")
@@ -135,8 +154,7 @@ func (h *ProxyHandler) HandleStreamingPost(w http.ResponseWriter, r *http.Reques
 
 	upstreamReq.Header = upstreamHeaders
 
-	client := &http.Client{}
-	initialResponse, err := client.Do(upstreamReq)
+	initialResponse, err := h.HTTPClient.GetClient().Do(upstreamReq)
 	if err != nil {
 		logger.LogError("Failed to make initial request:", err)
 		JSONError(w, 502, "Bad Gateway", "Failed to connect to upstream server")
@@ -198,20 +216,34 @@ func (h *ProxyHandler) HandleStreamingPost(w http.ResponseWriter, r *http.Reques
 
 	// Process stream with retry logic
 	err = streaming.ProcessStreamAndRetryInternally(
+		r.Context(),
 		h.Config,
+		h.HTTPClient,
+		h.JSONProcessor,
 		initialResponse.Body,
 		w,
 		requestBody,
 		upstreamURL,
 		r.Header,
 	)
-
 	if err != nil {
 		logger.LogError("=== UNHANDLED EXCEPTION IN STREAM PROCESSOR ===")
 		logger.LogError("Exception:", err)
 	}
 
 	initialResponse.Body.Close()
+
+	// Record response time
+	responseTime := time.Since(startTime)
+	m.RecordResponseTime(responseTime)
+
+	if err != nil {
+		m.IncrementFailedRequests()
+		m.IncrementErrorByType("streaming_error")
+	} else {
+		m.IncrementSuccessfulRequests()
+	}
+
 	logger.LogInfo("Streaming response completed")
 }
 
@@ -238,8 +270,7 @@ func (h *ProxyHandler) HandleNonStreaming(w http.ResponseWriter, r *http.Request
 
 	upstreamReq.Header = upstreamHeaders
 
-	client := &http.Client{}
-	resp, err := client.Do(upstreamReq)
+	resp, err := h.HTTPClient.GetClient().Do(upstreamReq)
 	if err != nil {
 		JSONError(w, 502, "Bad Gateway", "Failed to connect to upstream server")
 		return

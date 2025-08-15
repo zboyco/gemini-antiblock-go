@@ -2,6 +2,7 @@ package streaming
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,7 +11,9 @@ import (
 	"time"
 
 	"gemini-antiblock/config"
+	httpClient "gemini-antiblock/http"
 	"gemini-antiblock/logger"
+	"gemini-antiblock/utils"
 )
 
 var nonRetryableStatuses = map[int]bool{
@@ -83,7 +86,7 @@ func BuildRetryRequestBody(originalBody map[string]interface{}, accumulatedText 
 }
 
 // ProcessStreamAndRetryInternally handles streaming with internal retry logic
-func ProcessStreamAndRetryInternally(cfg *config.Config, initialReader io.Reader, writer io.Writer, originalRequestBody map[string]interface{}, upstreamURL string, originalHeaders http.Header) error {
+func ProcessStreamAndRetryInternally(ctx context.Context, cfg *config.Config, httpClientMgr *httpClient.ClientManager, jsonProcessor *utils.JSONProcessor, initialReader io.Reader, writer io.Writer, originalRequestBody map[string]interface{}, upstreamURL string, originalHeaders http.Header) error {
 	var accumulatedText string
 	consecutiveRetryCount := 0
 	currentReader := initialReader
@@ -93,9 +96,30 @@ func ProcessStreamAndRetryInternally(cfg *config.Config, initialReader io.Reader
 	isOutputtingFormalText := false
 	swallowModeActive := false
 
+	// Context for managing current stream goroutine
+	var streamCtx context.Context
+	var streamCancel context.CancelFunc
+
 	logger.LogInfo(fmt.Sprintf("Starting stream processing session. Max retries: %d", cfg.MaxConsecutiveRetries))
 
+	// Ensure context is cancelled when function exits
+	defer func() {
+		if streamCancel != nil {
+			logger.LogDebug("Cancelling stream context on function exit")
+			streamCancel()
+		}
+	}()
+
 	for {
+		// Cancel previous stream context if it exists
+		if streamCancel != nil {
+			logger.LogDebug("Cancelling previous stream context")
+			streamCancel()
+		}
+
+		// Create new context for this stream attempt
+		streamCtx, streamCancel = context.WithCancel(ctx)
+
 		interruptionReason := ""
 		cleanExit := false
 		streamStartTime := time.Now()
@@ -104,9 +128,9 @@ func ProcessStreamAndRetryInternally(cfg *config.Config, initialReader io.Reader
 
 		logger.LogDebug(fmt.Sprintf("=== Starting stream attempt %d/%d ===", consecutiveRetryCount+1, cfg.MaxConsecutiveRetries+1))
 
-		// Create channel for SSE lines
-		lineCh := make(chan string, 100)
-		go SSELineIterator(currentReader, lineCh)
+		// Create channel for SSE lines with configurable buffer size
+		lineCh := make(chan string, cfg.SSEBufferSize)
+		go SSELineIterator(streamCtx, currentReader, lineCh)
 
 		// Process lines
 		for line := range lineCh {
@@ -268,7 +292,7 @@ func ProcessStreamAndRetryInternally(cfg *config.Config, initialReader io.Reader
 
 		// Build retry request
 		retryBody := BuildRetryRequestBody(originalRequestBody, accumulatedText)
-		retryBodyBytes, err := json.Marshal(retryBody)
+		retryBodyBytes, err := jsonProcessor.Marshal(retryBody)
 		if err != nil {
 			logger.LogError("Failed to marshal retry body:", err)
 			time.Sleep(cfg.RetryDelayMs)
@@ -296,8 +320,7 @@ func ProcessStreamAndRetryInternally(cfg *config.Config, initialReader io.Reader
 		logger.LogDebug(fmt.Sprintf("Retry request body size: %d bytes", len(retryBodyBytes)))
 
 		// Make retry request
-		client := &http.Client{}
-		retryResponse, err := client.Do(retryReq)
+		retryResponse, err := httpClientMgr.GetClient().Do(retryReq)
 		if err != nil {
 			logger.LogError(fmt.Sprintf("=== RETRY ATTEMPT %d FAILED ===", consecutiveRetryCount))
 			logger.LogError("Exception during retry:", err)

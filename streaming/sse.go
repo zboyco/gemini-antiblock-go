@@ -2,6 +2,7 @@ package streaming
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,8 +11,8 @@ import (
 	"gemini-antiblock/logger"
 )
 
-// SSELineIterator reads SSE lines from a reader
-func SSELineIterator(reader io.Reader, ch chan<- string) {
+// SSELineIterator reads SSE lines from a reader with context cancellation support
+func SSELineIterator(ctx context.Context, reader io.Reader, ch chan<- string) {
 	defer close(ch)
 
 	scanner := bufio.NewScanner(reader)
@@ -20,6 +21,14 @@ func SSELineIterator(reader io.Reader, ch chan<- string) {
 	logger.LogDebug("Starting SSE line iteration")
 
 	for scanner.Scan() {
+		// Check if context is cancelled
+		select {
+		case <-ctx.Done():
+			logger.LogDebug("SSE iterator cancelled by context")
+			return
+		default:
+		}
+
 		line := scanner.Text()
 		if strings.TrimSpace(line) != "" {
 			lineCount++
@@ -30,7 +39,14 @@ func SSELineIterator(reader io.Reader, ch chan<- string) {
 					}
 					return line
 				}()))
-			ch <- line
+
+			// Send line to channel with context cancellation check
+			select {
+			case ch <- line:
+			case <-ctx.Done():
+				logger.LogDebug("SSE iterator cancelled while sending line")
+				return
+			}
 		}
 	}
 
