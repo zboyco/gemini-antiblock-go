@@ -198,9 +198,23 @@ func RemoveDoneTokenFromLine(line string, shouldRemove bool) string {
 		return line
 	}
 
-	modifiedText := strings.TrimSuffix(strings.TrimSpace(text), "[done]")
-	if text != modifiedText {
-		logger.LogDebug(fmt.Sprintf("Removed [done] token from text content. Original length: %d, Modified length: %d", len(text), len(modifiedText)))
+	// Remove the longest suffix of "[done]" from the text
+	// This handles cases where [done] is split across chunks
+	originalText := strings.TrimSpace(text)
+	modifiedText := originalText
+
+	// Try to remove each possible suffix of "[done]"
+	doneToken := "[done]"
+	for i := len(doneToken); i > 0; i-- {
+		suffix := doneToken[len(doneToken)-i:]
+		if strings.HasSuffix(originalText, suffix) {
+			modifiedText = strings.TrimSuffix(originalText, suffix)
+			logger.LogDebug(fmt.Sprintf("Removed [done] token suffix '%s' from text content. Original length: %d, Modified length: %d", suffix, len(originalText), len(modifiedText)))
+			break
+		}
+	}
+
+	if originalText != modifiedText {
 		part["text"] = modifiedText
 
 		modifiedData, err := json.Marshal(data)
