@@ -40,6 +40,10 @@ func main() {
 	// Set up routes
 	router := mux.NewRouter()
 
+	// Health check endpoint
+	router.HandleFunc("/health", handlers.HealthHandler).Methods("GET")
+	router.HandleFunc("/healthz", handlers.HealthHandler).Methods("GET")
+
 	// Handle all requests with the proxy handler
 	router.PathPrefix("/").Handler(proxyHandler)
 

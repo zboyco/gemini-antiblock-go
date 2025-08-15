@@ -57,7 +57,7 @@ EXPOSE 8080
 
 # 健康检查
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:${PORT}/ || exit 1
+    CMD curl -f http://localhost:${PORT}/health || exit 1
 
 # 运行应用
 ENTRYPOINT ["/app/gemini-antiblock"]
